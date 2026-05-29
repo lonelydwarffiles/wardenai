@@ -2,6 +2,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import sqlite3
 from typing import Any, Dict, List
 
@@ -51,6 +52,9 @@ class MemoryManager:
     def _cosine_similarity(self, first: List[float], second: List[float]) -> float:
         return sum(a * b for a, b in zip(first, second))
 
+    def _tokenize(self, text: str) -> List[str]:
+        return re.findall(r"[a-z0-9]+", text.lower())
+
     def log_infraction(self, timestamp: str, context: Any, action_taken: str) -> None:
         context_text = self._to_text(context)
         searchable_text = f"{timestamp} {context_text} {action_taken}".strip()
@@ -75,15 +79,19 @@ class MemoryManager:
         with sqlite3.connect(self.db_path) as connection:
             rows = connection.execute(
                 """
-                SELECT timestamp, context_json, action_taken, embedding_json
+                SELECT timestamp, context_json, action_taken, searchable_text, embedding_json
                 FROM infractions
                 ORDER BY id DESC
                 """
             ).fetchall()
 
         scored: List[Dict[str, Any]] = []
-        for timestamp, context_json, action_taken, embedding_json in rows:
-            score = self._cosine_similarity(query_embedding, json.loads(embedding_json))
+        query_tokens = set(self._tokenize(query_text))
+        for timestamp, context_json, action_taken, searchable_text, embedding_json in rows:
+            semantic_score = self._cosine_similarity(query_embedding, json.loads(embedding_json))
+            row_tokens = set(self._tokenize(searchable_text))
+            token_overlap = len(query_tokens.intersection(row_tokens)) / max(1, len(query_tokens))
+            score = semantic_score + token_overlap
             try:
                 parsed_context = json.loads(context_json)
             except json.JSONDecodeError:
