@@ -71,3 +71,54 @@ This runs `./init_setup.sh`, which:
   - connects to Ollama via `http://ollama-server:11434`
   - persistent SQLite volume: `sqlite_data` (`/app/data/sqlite`)
   - persistent Chroma volume: `chroma_data` (`/app/data/chroma`)
+
+## Troubleshooting
+
+- **`make setup` fails with Docker not found**
+  - Ensure Docker is installed and running.
+  - Verify with:
+    ```bash
+    docker --version
+    ```
+
+- **Docker Compose command not available**
+  - Install either the `docker compose` plugin or `docker-compose`.
+  - Verify with:
+    ```bash
+    docker compose version
+    ```
+    or
+    ```bash
+    docker-compose --version
+    ```
+
+- **Ollama health check timeout during setup**
+  - Check Ollama container logs:
+    ```bash
+    docker compose logs ollama-server
+    ```
+  - Retry setup after confirming container startup:
+    ```bash
+    make setup
+    ```
+
+- **Model pulls are slow or fail intermittently**
+  - Re-run setup to retry pulls:
+    ```bash
+    make setup
+    ```
+  - Confirm available disk space for model cache volume.
+
+- **Backend cannot connect to Ollama**
+  - Ensure both services are running:
+    ```bash
+    docker compose ps
+    ```
+  - Verify `warden-backend` uses `OLLAMA_HOST=http://ollama-server:11434` from `docker-compose.yml`.
+
+- **Need a clean container restart**
+  - Restart stack while preserving volumes:
+    ```bash
+    make down
+    make up
+    ```
