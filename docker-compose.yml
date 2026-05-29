@@ -1,14 +1,36 @@
 services:
-  ai-warden:
-    build: .
-    container_name: ai-warden
+  ollama-server:
+    image: ollama/ollama:latest
+    container_name: ollama-server
+    ports:
+      - "11434:11434"
+    environment:
+      OLLAMA_NUM_PARALLEL: "4"
+      OLLAMA_MAX_LOADED_MODELS: "3"
+    volumes:
+      - ollama_cache:/root/.ollama
+    restart: unless-stopped
+
+  warden-backend:
+    build:
+      context: .
+    container_name: warden-backend
+    depends_on:
+      - ollama-server
     env_file:
       - .env
+    environment:
+      OLLAMA_HOST: http://ollama-server:11434
+      MEMORY_DB_PATH: /app/data/sqlite/warden_memory.db
+      CHROMA_PERSIST_DIRECTORY: /app/data/chroma
     ports:
       - "8080:8080"
     volumes:
-      - ai_warden_data:/app/data
+      - sqlite_data:/app/data/sqlite
+      - chroma_data:/app/data/chroma
     restart: unless-stopped
 
 volumes:
-  ai_warden_data:
+  ollama_cache:
+  sqlite_data:
+  chroma_data:
