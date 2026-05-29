@@ -1,0 +1,14 @@
+services:
+  ai-warden:
+    build: .
+    container_name: ai-warden
+    env_file:
+      - .env
+    ports:
+      - "8080:8080"
+    volumes:
+      - ai_warden_data:/app/data
+    restart: unless-stopped
+
+volumes:
+  ai_warden_data:
