@@ -18,6 +18,7 @@ Modular, containerized backend for AI-assisted Warden decisions, Ollama model or
 1. Clone the repo.
 2. Copy `.env.example` to `.env`.
 3. Update environment variables as needed.
+4. If using Cloudflare Tunnel private hostnames, set `CLOUDFLARED_TUNNEL_TOKEN`.
 
 ## One-Click Setup
 
@@ -46,6 +47,12 @@ This runs `./init_setup.sh`, which:
   make up
   ```
 
+- Start stack with Cloudflare Tunnel connector (private hostname):
+
+  ```bash
+  docker compose --profile tunnel up -d
+  ```
+
 - Stop containers (preserves volumes):
 
   ```bash
@@ -71,6 +78,22 @@ This runs `./init_setup.sh`, which:
   - connects to Ollama via `http://ollama-server:11434`
   - persistent SQLite volume: `sqlite_data` (`/app/data/sqlite`)
   - persistent Chroma volume: `chroma_data` (`/app/data/chroma`)
+- `cloudflared` (profile: `tunnel`)
+  - image: `cloudflare/cloudflared:latest`
+  - runs tunnel connector using `CLOUDFLARED_TUNNEL_TOKEN`
+  - expose `warden-backend:8080` through a Cloudflare Tunnel private hostname
+
+## Cloudflare Tunnel (Private Hostname)
+
+1. Create a tunnel in Cloudflare Zero Trust and copy the connector token.
+2. Set `CLOUDFLARED_TUNNEL_TOKEN` in `.env`.
+3. In the tunnel configuration, add a **private hostname** that routes to `http://warden-backend:8080`.
+4. Start with:
+   ```bash
+   docker compose --profile tunnel up -d
+   ```
+
+This keeps `warden-backend` and `ollama-server` off direct host port exposure.
 
 ## Troubleshooting
 
