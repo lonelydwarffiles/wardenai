@@ -1,6 +1,7 @@
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from services.mcp_server import (
@@ -10,6 +11,7 @@ from services.mcp_server import (
     MCPClient,
     TOOL_NAME,
 )
+from services.memory_manager import MemoryManager
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +52,18 @@ HANDLER_SYSTEM_PROMPT = (
     + _SHARED_TOOL_BLOCK
     + "\n\nUse these tools when appropriate to enforce rules or communicate publicly."
 )
+
+
+def _build_handler_prompt(effective_phrases: List[str]) -> str:
+    if not effective_phrases:
+        return HANDLER_SYSTEM_PROMPT
+    top_phrases = "\n".join(f"- {phrase}" for phrase in effective_phrases[:3])
+    return (
+        HANDLER_SYSTEM_PROMPT
+        + "\n\nMost Effective Correction Phrases (weekly meta-optimized):\n"
+        + top_phrases
+        + "\nUse these phrases naturally when providing correction guidance."
+    )
 
 TONE_SYSTEM_PROMPT = (
     "You are the AI Warden Tone Specialist.\n"
@@ -112,10 +126,12 @@ class OllamaModel:
         self,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
+        system_prompt_override: Optional[str] = None,
     ) -> Any:
         # Replace any generic system message with the specialist-specific prompt
         non_system = [m for m in messages if m.get("role") != "system"]
-        full_messages = [{"role": "system", "content": self._system_prompt}] + non_system
+        prompt = system_prompt_override or self._system_prompt
+        full_messages = [{"role": "system", "content": prompt}] + non_system
 
         kwargs: Dict[str, Any] = {"model": self._model_name, "messages": full_messages}
         if tools:
@@ -173,6 +189,7 @@ def _parse_ollama_response(response: Any) -> Dict[str, Any]:
 def create_ollama_orchestrator(
     api: Any,
     mcp_client: Optional[MCPClient] = None,
+    memory_manager: Optional[MemoryManager] = None,
     ollama_host: str = "http://localhost:11434",
 ) -> "WardenOrchestrator":
     """Create a :class:`WardenOrchestrator` backed by local Ollama models.
@@ -196,6 +213,7 @@ def create_ollama_orchestrator(
         tone_model=tone_model,
         sensor_model=sensor_model,
         mcp_client=mcp_client,
+        memory_manager=memory_manager,
     )
 
 
@@ -228,9 +246,10 @@ class WardenOrchestrator:
         tone_model: Any = None,
         sensor_model: Any = None,
         mcp_client: Optional[MCPClient] = None,
+        memory_manager: Optional[MemoryManager] = None,
     ) -> None:
         shared_mcp_client = mcp_client or MCPClient(DeviceCommandMCPServer(api or _NoOpDeviceExecutor()))
-        self.handler_agent = HandlerAgent(model=handler_model)
+        self.handler_agent = HandlerAgent(model=handler_model, memory_manager=memory_manager)
         self.tone_specialist = ToneSpecialist(model=tone_model, mcp_client=shared_mcp_client)
         self.sensor_specialist = SensorSpecialist(model=sensor_model, mcp_client=shared_mcp_client)
 
@@ -246,14 +265,24 @@ class WardenOrchestrator:
 @dataclass
 class HandlerAgent:
     model: Any = None
+    memory_manager: Optional[MemoryManager] = None
     name: str = "Handler_Agent"
+    optimization_interval_days: int = 7
+    _last_optimization_at: Optional[datetime] = None
+    _effective_phrases: List[str] = field(default_factory=list)
 
     async def respond(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         user_text = _extract_user_text(payload)
         if self.model is None:
             return {"reply": user_text}
 
-        result = await _call_model(self.model, payload={"text": user_text, "payload": payload})
+        self._refresh_effective_phrases_if_due()
+        system_prompt_override = _build_handler_prompt(self._effective_phrases)
+        result = await _call_model(
+            self.model,
+            payload={"text": user_text, "payload": payload},
+            system_prompt_override=system_prompt_override,
+        )
         if isinstance(result, str):
             return {"reply": result}
         if isinstance(result, dict):
@@ -261,6 +290,20 @@ class HandlerAgent:
                 return {"reply": result["reply"]}
             return result
         return {"reply": str(result)}
+
+    def _refresh_effective_phrases_if_due(self) -> None:
+        if self.memory_manager is None:
+            return
+
+        now = datetime.now(timezone.utc)
+        if self._last_optimization_at and (now - self._last_optimization_at) < timedelta(
+            days=self.optimization_interval_days
+        ):
+            return
+
+        highest_impact = self.memory_manager.get_highest_impact_patterns(limit=3)
+        self._effective_phrases = [item["correction_pattern"] for item in highest_impact]
+        self._last_optimization_at = now
 
 
 @dataclass
@@ -406,7 +449,12 @@ def _iter_tool_candidates(raw_output: Any) -> List[Dict[str, Any]]:
     return []
 
 
-async def _call_model(model: Any, payload: Dict[str, Any], tools: Optional[List[Dict[str, Any]]] = None) -> Any:
+async def _call_model(
+    model: Any,
+    payload: Dict[str, Any],
+    tools: Optional[List[Dict[str, Any]]] = None,
+    system_prompt_override: Optional[str] = None,
+) -> Any:
     if model is None:
         return {}
 
@@ -417,13 +465,33 @@ async def _call_model(model: Any, payload: Dict[str, Any], tools: Optional[List[
     model_kwargs = {"messages": messages}
     if tools is not None:
         model_kwargs["tools"] = tools
+    if system_prompt_override is not None:
+        model_kwargs["system_prompt_override"] = system_prompt_override
 
     if hasattr(model, "generate"):
-        return await _maybe_await(model.generate(**model_kwargs))
+        try:
+            return await _maybe_await(model.generate(**model_kwargs))
+        except TypeError:
+            if "system_prompt_override" in model_kwargs:
+                model_kwargs.pop("system_prompt_override", None)
+                return await _maybe_await(model.generate(**model_kwargs))
+            raise
     if hasattr(model, "complete"):
-        return await _maybe_await(model.complete(**model_kwargs))
+        try:
+            return await _maybe_await(model.complete(**model_kwargs))
+        except TypeError:
+            if "system_prompt_override" in model_kwargs:
+                model_kwargs.pop("system_prompt_override", None)
+                return await _maybe_await(model.complete(**model_kwargs))
+            raise
     if callable(model):
-        return await _maybe_await(model(**model_kwargs))
+        try:
+            return await _maybe_await(model(**model_kwargs))
+        except TypeError:
+            if "system_prompt_override" in model_kwargs:
+                model_kwargs.pop("system_prompt_override", None)
+                return await _maybe_await(model(**model_kwargs))
+            raise
     return model
 
 

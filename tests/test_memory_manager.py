@@ -51,6 +51,23 @@ class MemoryManagerTests(unittest.TestCase):
             denial_count = sum(1 for record in refreshed if record["action_taken"] == "deny")
             self.assertGreaterEqual(denial_count, 2)
 
+    def test_reaction_registry_tracks_highest_impact_patterns(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = MemoryManager(db_path=f"{temp_dir}/memory.db")
+            manager.record_reaction_outcome("Pattern A", 0.2)
+            manager.record_reaction_outcome("Pattern B", 1.2)
+            manager.record_reaction_outcome("Pattern C", 0.7)
+            manager.record_reaction_outcome("Pattern B", 1.6)
+
+            top_patterns = manager.get_highest_impact_patterns(limit=3)
+
+            self.assertEqual(top_patterns[0]["correction_pattern"], "Pattern B")
+            self.assertEqual(top_patterns[0]["compliance_improvement_delta"], 1.6)
+            self.assertEqual(
+                [item["correction_pattern"] for item in top_patterns],
+                ["Pattern B", "Pattern C", "Pattern A"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

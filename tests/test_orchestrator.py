@@ -35,10 +35,23 @@ class _CaptureSensorModel:
 class _CaptureHandlerModel:
     def __init__(self):
         self.calls = 0
+        self.last_kwargs = None
 
-    async def generate(self, messages):
+    async def generate(self, messages, **kwargs):
         self.calls += 1
+        self.last_kwargs = kwargs
         return {"reply": "handler-response"}
+
+
+class _FakeMemoryManager:
+    def get_highest_impact_patterns(self, limit=3):
+        self.last_limit = limit
+        return [
+            {"correction_pattern": "Pattern Alpha", "compliance_improvement_delta": 1.8, "updated_at": "now"},
+            {"correction_pattern": "Pattern Beta", "compliance_improvement_delta": 1.3, "updated_at": "now"},
+            {"correction_pattern": "Pattern Gamma", "compliance_improvement_delta": 0.9, "updated_at": "now"},
+            {"correction_pattern": "Pattern Delta", "compliance_improvement_delta": 0.5, "updated_at": "now"},
+        ]
 
 
 class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
@@ -96,6 +109,27 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(handler_model.calls, 0)
         self.assertIsNone(tone_model.captured_tools)
         self.assertEqual(sensor_model.captured_tools[0]["name"], "execute_device_command")
+
+    async def test_handler_injects_weekly_top_phrases_into_system_prompt(self):
+        api = _FakeAPI()
+        tone_model = _CaptureToneModel({"compliant": True, "compliance_score": 8})
+        handler_model = _CaptureHandlerModel()
+        memory_manager = _FakeMemoryManager()
+        orchestrator = WardenOrchestrator(
+            api=api,
+            handler_model=handler_model,
+            tone_model=tone_model,
+            memory_manager=memory_manager,
+        )
+
+        await orchestrator.route_payload({"type": "UserMessage", "text": "Acknowledged."})
+
+        self.assertIn("system_prompt_override", handler_model.last_kwargs)
+        prompt = handler_model.last_kwargs["system_prompt_override"]
+        self.assertIn("Pattern Alpha", prompt)
+        self.assertIn("Pattern Beta", prompt)
+        self.assertIn("Pattern Gamma", prompt)
+        self.assertNotIn("Pattern Delta", prompt)
 
 
 if __name__ == "__main__":

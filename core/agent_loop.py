@@ -63,6 +63,7 @@ class OllamaAgentLoop:
         self.memory = MemoryManager(db_path=memory_db_path)
         self.orchestrator = orchestrator or create_ollama_orchestrator(
             api=api,
+            memory_manager=self.memory,
             ollama_host=ollama_host,
         )
 
