@@ -147,7 +147,7 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(SENSOR_MODEL_NAME, "Qwen3-1.7B")
 
     def test_system_prompts_are_loaded_from_prompt_files(self):
-        self.assertIn("no name-calling", HANDLER_SYSTEM_PROMPT)
+        self.assertIn("without name-calling", HANDLER_SYSTEM_PROMPT)
         self.assertIn("strict JSON only", TONE_SYSTEM_PROMPT)
         self.assertIn("hard operational boundaries", SENSOR_SYSTEM_PROMPT.lower())
 
