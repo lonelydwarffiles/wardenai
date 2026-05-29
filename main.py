@@ -20,7 +20,7 @@ async def on_startup(app: web.Application) -> None:
         backend_ws_url=settings.backend_ws_url,
         api_key=settings.ai_warden_api_key,
         reconnect_delay_seconds=settings.reconnect_delay_seconds,
-        engine=WardenEngine(),
+        engine=WardenEngine(memory_db_path=settings.memory_db_path),
     )
     app["ws_task"] = asyncio.create_task(client.run_forever())
 

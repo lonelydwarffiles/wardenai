@@ -20,6 +20,7 @@ class Settings:
     reconnect_delay_seconds: int = 5
     health_host: str = DEFAULT_HEALTH_HOST
     health_port: int = DEFAULT_HEALTH_PORT
+    memory_db_path: str = "data/warden_memory.db"
 
 
 def build_backend_ws_endpoint(base_url: str) -> str:
@@ -45,6 +46,7 @@ def load_settings() -> Settings:
     reconnect_delay_seconds = int(os.getenv("RECONNECT_DELAY_SECONDS", "5"))
     health_host = os.getenv("HEALTH_HOST", DEFAULT_HEALTH_HOST)
     health_port = int(os.getenv("HEALTH_PORT", str(DEFAULT_HEALTH_PORT)))
+    memory_db_path = os.getenv("MEMORY_DB_PATH", "data/warden_memory.db").strip() or "data/warden_memory.db"
 
     return Settings(
         backend_ws_url=build_backend_ws_endpoint(raw_backend_url),
@@ -52,4 +54,5 @@ def load_settings() -> Settings:
         reconnect_delay_seconds=reconnect_delay_seconds,
         health_host=health_host,
         health_port=health_port,
+        memory_db_path=memory_db_path,
     )

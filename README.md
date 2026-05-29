@@ -5,7 +5,7 @@ Modular, containerized microservice for AI-assisted Warden decisions and backend
 ## Repository Structure
 
 - `/api`: WebSocket client logic for connecting to the backend
-- `/services`: Warden decision engine and tool-calling logic
+- `/services`: Warden decision engine, tool-calling logic, and memory retrieval (`memory_manager.py`)
 - `/core`: Environment loading and shared constants
 
 ## Getting Started
