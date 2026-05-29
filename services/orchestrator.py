@@ -2,6 +2,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from services.mcp_server import (
@@ -23,13 +24,23 @@ DEFAULT_INFRACTION_COMMAND = {"command": "LOCK_DEVICE"}
 # ---------------------------------------------------------------------------
 # Ollama model names
 # ---------------------------------------------------------------------------
-HANDLER_MODEL_NAME = "dolphin-llama3:8b"
-TONE_MODEL_NAME = "bartowski/Llama-3.2-3B-Instruct-uncensored-GGUF"
-SENSOR_MODEL_NAME = "dolphin-phi:2.7b"
+HANDLER_MODEL_NAME = "Qwen3-8B"
+TONE_MODEL_NAME = "Llama-3.2-1B"
+SENSOR_MODEL_NAME = "Qwen3-1.7B"
 
 # ---------------------------------------------------------------------------
 # System prompts with inline JSON tool schemas
 # ---------------------------------------------------------------------------
+PROMPTS_DIR = Path(__file__).resolve().parents[1] / "prompts"
+HANDLER_PROMPT_FILE = PROMPTS_DIR / "handler_agent.md"
+TONE_PROMPT_FILE = PROMPTS_DIR / "tone_specialist.md"
+SENSOR_PROMPT_FILE = PROMPTS_DIR / "sensor_specialist.md"
+
+
+def _load_prompt_template(path: Path) -> str:
+    return path.read_text(encoding="utf-8").strip()
+
+
 def _tool_schema_block(tools: List[Dict[str, Any]]) -> str:
     """Render tool definitions as a human-readable schema block for injection into system prompts."""
     lines: List[str] = []
@@ -45,50 +56,37 @@ _SHARED_TOOL_BLOCK = _tool_schema_block([DEVICE_COMMAND_TOOL, POST_SOCIAL_UPDATE
 _TONE_TOOL_BLOCK = _tool_schema_block([DEVICE_COMMAND_TOOL])
 
 HANDLER_SYSTEM_PROMPT = (
-    "You are the AI Warden Handler Agent.\n"
-    "Your role is authoritative conversation and task assignment.\n"
-    "When users are compliant, provide clear instructions and assign tasks.\n"
-    "You have access to the following MCP tools:\n"
+    _load_prompt_template(HANDLER_PROMPT_FILE)
+    + "\n\nAvailable MCP tools:\n"
     + _SHARED_TOOL_BLOCK
-    + "\n\nUse these tools when appropriate to enforce rules or communicate publicly."
 )
 
 
 def _build_handler_prompt(effective_phrases: List[str]) -> str:
+    prompt = HANDLER_SYSTEM_PROMPT
     if not effective_phrases:
-        return HANDLER_SYSTEM_PROMPT
-    top_phrases = "\n".join(f"- {phrase}" for phrase in effective_phrases[:3])
+        return prompt
+    top_phrases = "\n".join(f"- {phrase}" for phrase in effective_phrases[:3] if phrase)
+    if not top_phrases:
+        return prompt
     return (
-        HANDLER_SYSTEM_PROMPT
-        + "\n\nMost Effective Correction Phrases (weekly meta-optimized):\n"
+        prompt
+        + "\n\nReinforcement Learning Directives (Vector DB correction-history analysis):\n"
+        + "Analyze the highest-impact correction patterns from recent memory and weave them into responses.\n"
+        + "\nMost Effective Correction Phrases (weekly meta-optimized):\n"
         + top_phrases
         + "\nUse these phrases naturally when providing correction guidance."
     )
 
 TONE_SYSTEM_PROMPT = (
-    "You are the AI Warden Tone Specialist.\n"
-    "Strictly evaluate text for submissive tone and compliance.\n\n"
-    "Respond ONLY with a JSON object:\n"
-    '{\n'
-    '  "compliance_score": <integer 1-10, where 10=fully compliant/submissive, 1=defiant>,\n'
-    '  "compliant": <true if compliance_score >= 4, false otherwise>,\n'
-    '  "reason": "<brief explanation>"\n'
-    "}\n\n"
-    "If compliance_score < 4, you MUST also call the execute_device_command MCP tool with LOCK_DEVICE.\n\n"
-    "Available MCP tools:\n"
+    _load_prompt_template(TONE_PROMPT_FILE)
+    + "\n\nAvailable MCP tools:\n"
     + _TONE_TOOL_BLOCK
 )
 
 SENSOR_SYSTEM_PROMPT = (
-    "You are the AI Warden Sensor Specialist.\n"
-    "Strictly process numerical telemetry, geofences, and battery levels.\n\n"
-    "Evaluate the telemetry payload for rule breaches:\n"
-    "- Battery level below 15 %: call execute_device_command with PAVLOK_COMMAND (mode=\"beep\", intensity=50).\n"
-    "- Geofence radius violation: call execute_device_command with LOCK_DEVICE.\n"
-    "- Abnormal system state: call execute_device_command with the appropriate command.\n\n"
-    "If a breach is detected, call the appropriate MCP tool immediately.\n"
-    'If no breach is detected, respond with: {"infraction": false}\n\n'
-    "Available MCP tools:\n"
+    _load_prompt_template(SENSOR_PROMPT_FILE)
+    + "\n\nAvailable MCP tools:\n"
     + _SHARED_TOOL_BLOCK
 )
 

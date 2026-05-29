@@ -1,6 +1,15 @@
 import unittest
 
-from services.orchestrator import TERMINATE_SIGNAL, WardenOrchestrator
+from services.orchestrator import (
+    HANDLER_MODEL_NAME,
+    HANDLER_SYSTEM_PROMPT,
+    SENSOR_MODEL_NAME,
+    SENSOR_SYSTEM_PROMPT,
+    TERMINATE_SIGNAL,
+    TONE_MODEL_NAME,
+    TONE_SYSTEM_PROMPT,
+    WardenOrchestrator,
+)
 
 
 class _FakeAPI:
@@ -126,10 +135,21 @@ class OrchestratorTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("system_prompt_override", handler_model.last_kwargs)
         prompt = handler_model.last_kwargs["system_prompt_override"]
+        self.assertIn("Reinforcement Learning Directives", prompt)
         self.assertIn("Pattern Alpha", prompt)
         self.assertIn("Pattern Beta", prompt)
         self.assertIn("Pattern Gamma", prompt)
         self.assertNotIn("Pattern Delta", prompt)
+
+    def test_orchestrator_uses_configured_model_names(self):
+        self.assertEqual(HANDLER_MODEL_NAME, "Qwen3-8B")
+        self.assertEqual(TONE_MODEL_NAME, "Llama-3.2-1B")
+        self.assertEqual(SENSOR_MODEL_NAME, "Qwen3-1.7B")
+
+    def test_system_prompts_are_loaded_from_prompt_files(self):
+        self.assertIn("no name-calling", HANDLER_SYSTEM_PROMPT)
+        self.assertIn("strict JSON only", TONE_SYSTEM_PROMPT)
+        self.assertIn("hard operational boundaries", SENSOR_SYSTEM_PROMPT.lower())
 
 
 if __name__ == "__main__":
