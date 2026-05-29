@@ -1,13 +1,202 @@
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from services.mcp_server import DeviceCommandMCPServer, MCPClient, TOOL_NAME
+from services.mcp_server import (
+    DEVICE_COMMAND_TOOL,
+    POST_SOCIAL_UPDATE_TOOL,
+    DeviceCommandMCPServer,
+    MCPClient,
+    TOOL_NAME,
+)
+
+logger = logging.getLogger(__name__)
 
 TERMINATE_SIGNAL = "TERMINATE"
 USER_MESSAGE_TYPE = "UserMessage"
 TELEMETRY_TYPE = "TPE_TELEMETRY"
 DEFAULT_INFRACTION_COMMAND = {"command": "LOCK_DEVICE"}
+
+# ---------------------------------------------------------------------------
+# Ollama model names
+# ---------------------------------------------------------------------------
+HANDLER_MODEL_NAME = "dolphin-llama3:8b"
+TONE_MODEL_NAME = "bartowski/Llama-3.2-3B-Instruct-uncensored-GGUF"
+SENSOR_MODEL_NAME = "dolphin-phi:2.7b"
+
+# ---------------------------------------------------------------------------
+# System prompts with inline JSON tool schemas
+# ---------------------------------------------------------------------------
+def _tool_schema_block(tools: List[Dict[str, Any]]) -> str:
+    """Render tool definitions as a human-readable schema block for injection into system prompts."""
+    lines: List[str] = []
+    for tool in tools:
+        lines.append(f"\nTool name: {tool['name']}")
+        lines.append(f"Description: {tool['description']}")
+        lines.append("Input schema:")
+        lines.append(json.dumps(tool["inputSchema"], indent=2))
+    return "\n".join(lines)
+
+
+_SHARED_TOOL_BLOCK = _tool_schema_block([DEVICE_COMMAND_TOOL, POST_SOCIAL_UPDATE_TOOL])
+_TONE_TOOL_BLOCK = _tool_schema_block([DEVICE_COMMAND_TOOL])
+
+HANDLER_SYSTEM_PROMPT = (
+    "You are the AI Warden Handler Agent.\n"
+    "Your role is authoritative conversation and task assignment.\n"
+    "When users are compliant, provide clear instructions and assign tasks.\n"
+    "You have access to the following MCP tools:\n"
+    + _SHARED_TOOL_BLOCK
+    + "\n\nUse these tools when appropriate to enforce rules or communicate publicly."
+)
+
+TONE_SYSTEM_PROMPT = (
+    "You are the AI Warden Tone Specialist.\n"
+    "Strictly evaluate text for submissive tone and compliance.\n\n"
+    "Respond ONLY with a JSON object:\n"
+    '{\n'
+    '  "compliance_score": <integer 1-10, where 10=fully compliant/submissive, 1=defiant>,\n'
+    '  "compliant": <true if compliance_score >= 4, false otherwise>,\n'
+    '  "reason": "<brief explanation>"\n'
+    "}\n\n"
+    "If compliance_score < 4, you MUST also call the execute_device_command MCP tool with LOCK_DEVICE.\n\n"
+    "Available MCP tools:\n"
+    + _TONE_TOOL_BLOCK
+)
+
+SENSOR_SYSTEM_PROMPT = (
+    "You are the AI Warden Sensor Specialist.\n"
+    "Strictly process numerical telemetry, geofences, and battery levels.\n\n"
+    "Evaluate the telemetry payload for rule breaches:\n"
+    "- Battery level below 15 %: call execute_device_command with PAVLOK_COMMAND (mode=\"beep\", intensity=50).\n"
+    "- Geofence radius violation: call execute_device_command with LOCK_DEVICE.\n"
+    "- Abnormal system state: call execute_device_command with the appropriate command.\n\n"
+    "If a breach is detected, call the appropriate MCP tool immediately.\n"
+    'If no breach is detected, respond with: {"infraction": false}\n\n'
+    "Available MCP tools:\n"
+    + _SHARED_TOOL_BLOCK
+)
+
+
+# ---------------------------------------------------------------------------
+# Ollama model wrapper
+# ---------------------------------------------------------------------------
+class OllamaModel:
+    """Wraps an Ollama chat model for use as a specialist or handler model.
+
+    Parameters
+    ----------
+    model_name:
+        The name of the model as registered in the local Ollama server
+        (e.g. ``"dolphin-llama3:8b"``).
+    system_prompt:
+        Role-specific system prompt with injected MCP tool schemas.
+    host:
+        Base URL of the local Ollama HTTP server.
+    """
+
+    def __init__(
+        self,
+        model_name: str,
+        system_prompt: str,
+        host: str = "http://localhost:11434",
+    ) -> None:
+        import ollama  # imported lazily so the module loads without ollama installed
+
+        self._model_name = model_name
+        self._system_prompt = system_prompt
+        self._client = ollama.AsyncClient(host=host)
+
+    async def generate(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Any:
+        # Replace any generic system message with the specialist-specific prompt
+        non_system = [m for m in messages if m.get("role") != "system"]
+        full_messages = [{"role": "system", "content": self._system_prompt}] + non_system
+
+        kwargs: Dict[str, Any] = {"model": self._model_name, "messages": full_messages}
+        if tools:
+            kwargs["tools"] = tools
+
+        response = await self._client.chat(**kwargs)
+        return _parse_ollama_response(response)
+
+
+def _parse_ollama_response(response: Any) -> Dict[str, Any]:
+    """Normalise a raw Ollama ChatResponse into the internal tool-call / reply format."""
+    if isinstance(response, dict):
+        message: Any = response.get("message", {})
+    else:
+        message = getattr(response, "message", {})
+
+    if isinstance(message, dict):
+        content: str = message.get("content", "") or ""
+        tool_calls_raw: Any = message.get("tool_calls") or []
+    else:
+        content = getattr(message, "content", "") or ""
+        tool_calls_raw = getattr(message, "tool_calls", None) or []
+
+    if tool_calls_raw:
+        parsed_calls: List[Dict[str, Any]] = []
+        for call in tool_calls_raw:
+            if isinstance(call, dict):
+                fn = call.get("function", call)
+                name = fn.get("name") if isinstance(fn, dict) else None
+                arguments = fn.get("arguments", {}) if isinstance(fn, dict) else {}
+            else:
+                fn = getattr(call, "function", call)
+                name = getattr(fn, "name", None)
+                arguments = getattr(fn, "arguments", {}) or {}
+
+            if name:
+                parsed_calls.append(
+                    {"name": name, "arguments": arguments if isinstance(arguments, dict) else {}}
+                )
+        if parsed_calls:
+            return {"tool_calls": parsed_calls}
+
+    if content:
+        try:
+            return json.loads(content)
+        except (json.JSONDecodeError, ValueError):
+            return {"reply": content}
+
+    return {}
+
+
+# ---------------------------------------------------------------------------
+# Factory function
+# ---------------------------------------------------------------------------
+def create_ollama_orchestrator(
+    api: Any,
+    mcp_client: Optional[MCPClient] = None,
+    ollama_host: str = "http://localhost:11434",
+) -> "WardenOrchestrator":
+    """Create a :class:`WardenOrchestrator` backed by local Ollama models.
+
+    Parameters
+    ----------
+    api:
+        Device API object that exposes ``execute_device_command``.  May be
+        ``None`` during local development; a no-op executor will be used.
+    mcp_client:
+        Pre-built :class:`MCPClient`.  Created automatically when omitted.
+    ollama_host:
+        Base URL of the local Ollama HTTP server.
+    """
+    handler_model = OllamaModel(HANDLER_MODEL_NAME, HANDLER_SYSTEM_PROMPT, host=ollama_host)
+    tone_model = OllamaModel(TONE_MODEL_NAME, TONE_SYSTEM_PROMPT, host=ollama_host)
+    sensor_model = OllamaModel(SENSOR_MODEL_NAME, SENSOR_SYSTEM_PROMPT, host=ollama_host)
+    return WardenOrchestrator(
+        api=api,
+        handler_model=handler_model,
+        tone_model=tone_model,
+        sensor_model=sensor_model,
+        mcp_client=mcp_client,
+    )
 
 
 async def route_payload(
@@ -133,7 +322,17 @@ async def _evaluate_specialist_result(
         }
 
     if isinstance(model_output, dict):
-        infraction = bool(model_output.get("infraction")) or model_output.get("compliant") is False
+        score = model_output.get("compliance_score")
+        score_below_threshold = (
+            isinstance(score, int)
+            and not isinstance(score, bool)
+            and score < 4
+        )
+        infraction = (
+            bool(model_output.get("infraction"))
+            or model_output.get("compliant") is False
+            or score_below_threshold
+        )
         if infraction:
             arguments = model_output.get("arguments")
             if not isinstance(arguments, dict):
