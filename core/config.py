@@ -21,6 +21,7 @@ class Settings:
     health_host: str = DEFAULT_HEALTH_HOST
     health_port: int = DEFAULT_HEALTH_PORT
     memory_db_path: str = "data/warden_memory.db"
+    ollama_host: str = "http://localhost:11434"
 
 
 def build_backend_ws_endpoint(base_url: str) -> str:
@@ -47,6 +48,7 @@ def load_settings() -> Settings:
     health_host = os.getenv("HEALTH_HOST", DEFAULT_HEALTH_HOST)
     health_port = int(os.getenv("HEALTH_PORT", str(DEFAULT_HEALTH_PORT)))
     memory_db_path = os.getenv("MEMORY_DB_PATH", "data/warden_memory.db").strip() or "data/warden_memory.db"
+    ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434").strip() or "http://localhost:11434"
 
     return Settings(
         backend_ws_url=build_backend_ws_endpoint(raw_backend_url),
@@ -55,4 +57,5 @@ def load_settings() -> Settings:
         health_host=health_host,
         health_port=health_port,
         memory_db_path=memory_db_path,
+        ollama_host=ollama_host,
     )

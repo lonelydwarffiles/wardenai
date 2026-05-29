@@ -1,7 +1,11 @@
 import itertools
+import logging
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
+logger = logging.getLogger(__name__)
+
 TOOL_NAME = "execute_device_command"
+POST_SOCIAL_UPDATE_TOOL_NAME = "post_social_update"
 
 LOCK_DEVICE_SCHEMA: Dict[str, Any] = {
     "type": "object",
@@ -57,6 +61,22 @@ DEVICE_COMMAND_TOOL: Dict[str, Any] = {
         "oneOf": [{"$ref": f"#/$defs/{name}"} for name in DEVICE_COMMAND_SCHEMAS],
         "$defs": DEVICE_COMMAND_SCHEMAS,
     },
+}
+
+POST_SOCIAL_UPDATE_SCHEMA: Dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "platform": {"type": "string", "enum": ["twitter", "bluesky"]},
+        "message": {"type": "string", "minLength": 1, "maxLength": 280},
+    },
+    "required": ["platform", "message"],
+    "additionalProperties": False,
+}
+
+POST_SOCIAL_UPDATE_TOOL: Dict[str, Any] = {
+    "name": POST_SOCIAL_UPDATE_TOOL_NAME,
+    "description": "Post a public social media update to Twitter or Bluesky.",
+    "inputSchema": POST_SOCIAL_UPDATE_SCHEMA,
 }
 
 
@@ -143,9 +163,17 @@ class DeviceCommandMCPServer(MCPServer):
         super().__init__()
         self.api = api
         self.register_tool(DEVICE_COMMAND_TOOL, self._execute_device_command)
+        self.register_tool(POST_SOCIAL_UPDATE_TOOL, self._post_social_update)
 
     async def _execute_device_command(self, arguments: Dict[str, Any]) -> Any:
         executor = _resolve_device_executor(self.api)
+        return await _maybe_await(executor(arguments))
+
+    async def _post_social_update(self, arguments: Dict[str, Any]) -> Any:
+        executor = _resolve_social_executor(self.api)
+        if executor is None:
+            logger.warning("post_social_update called but no executor configured: %s", arguments)
+            return {"ok": False, "error": "Social update executor not configured", "arguments": arguments}
         return await _maybe_await(executor(arguments))
 
 
@@ -155,6 +183,14 @@ def _resolve_device_executor(api: Any) -> Callable[[Dict[str, Any]], Awaitable[A
     if hasattr(api, "tool_executor") and hasattr(api.tool_executor, TOOL_NAME):
         return getattr(api.tool_executor, TOOL_NAME)
     raise AttributeError(f"Device command executor '{TOOL_NAME}' is required")
+
+
+def _resolve_social_executor(api: Any) -> Optional[Callable[[Dict[str, Any]], Awaitable[Any] | Any]]:
+    if hasattr(api, POST_SOCIAL_UPDATE_TOOL_NAME):
+        return getattr(api, POST_SOCIAL_UPDATE_TOOL_NAME)
+    if hasattr(api, "tool_executor") and hasattr(api.tool_executor, POST_SOCIAL_UPDATE_TOOL_NAME):
+        return getattr(api.tool_executor, POST_SOCIAL_UPDATE_TOOL_NAME)
+    return None
 
 
 def _validate_schema(value: Any, schema: Dict[str, Any], root_schema: Optional[Dict[str, Any]] = None) -> None:

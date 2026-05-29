@@ -4,6 +4,7 @@ import math
 import os
 import re
 import sqlite3
+from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 
@@ -27,6 +28,15 @@ class MemoryManager:
                     action_taken TEXT NOT NULL,
                     searchable_text TEXT NOT NULL,
                     embedding_json TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS reaction_registry (
+                    correction_pattern TEXT PRIMARY KEY,
+                    compliance_improvement_delta REAL NOT NULL,
+                    updated_at TEXT NOT NULL
                 )
                 """
             )
@@ -120,3 +130,51 @@ class MemoryManager:
                 + f"context={self._to_text(record['context'])}"
             )
         return "\n".join(lines)
+
+    def record_reaction_outcome(
+        self,
+        correction_pattern: str,
+        compliance_improvement_delta: float,
+        updated_at: str | None = None,
+    ) -> None:
+        pattern = correction_pattern.strip()
+        if not pattern:
+            return
+
+        timestamp = updated_at or datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute(
+                """
+                INSERT INTO reaction_registry (correction_pattern, compliance_improvement_delta, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(correction_pattern) DO UPDATE SET
+                    compliance_improvement_delta = excluded.compliance_improvement_delta,
+                    updated_at = excluded.updated_at
+                """,
+                (pattern, float(compliance_improvement_delta), timestamp),
+            )
+            connection.commit()
+
+    def get_highest_impact_patterns(self, limit: int = 3) -> List[Dict[str, Any]]:
+        if limit <= 0:
+            return []
+
+        with sqlite3.connect(self.db_path) as connection:
+            rows = connection.execute(
+                """
+                SELECT correction_pattern, compliance_improvement_delta, updated_at
+                FROM reaction_registry
+                ORDER BY compliance_improvement_delta DESC, updated_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+
+        return [
+            {
+                "correction_pattern": correction_pattern,
+                "compliance_improvement_delta": compliance_improvement_delta,
+                "updated_at": updated_at,
+            }
+            for correction_pattern, compliance_improvement_delta, updated_at in rows
+        ]
