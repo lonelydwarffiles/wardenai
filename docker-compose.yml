@@ -2,8 +2,6 @@ services:
   ollama-server:
     image: ollama/ollama:latest
     container_name: ollama-server
-    ports:
-      - "11434:11434"
     environment:
       OLLAMA_NUM_PARALLEL: "4"
       OLLAMA_MAX_LOADED_MODELS: "3"
@@ -23,11 +21,18 @@ services:
       OLLAMA_HOST: http://ollama-server:11434
       MEMORY_DB_PATH: /app/data/sqlite/warden_memory.db
       CHROMA_PERSIST_DIRECTORY: /app/data/chroma
-    ports:
-      - "8080:8080"
     volumes:
       - sqlite_data:/app/data/sqlite
       - chroma_data:/app/data/chroma
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    profiles: ["tunnel"]
+    depends_on:
+      - warden-backend
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TUNNEL_TOKEN:-}
     restart: unless-stopped
 
 volumes:
