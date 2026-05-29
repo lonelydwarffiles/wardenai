@@ -5,7 +5,7 @@ from aiohttp import web
 
 from api.ws_client import BackendWebSocketClient
 from core.config import load_settings
-from services.warden_engine import WardenEngine
+from services.orchestrator import WardenOrchestrator
 
 logging.basicConfig(level=logging.INFO)
 
@@ -20,7 +20,7 @@ async def on_startup(app: web.Application) -> None:
         backend_ws_url=settings.backend_ws_url,
         api_key=settings.ai_warden_api_key,
         reconnect_delay_seconds=settings.reconnect_delay_seconds,
-        engine=WardenEngine(memory_db_path=settings.memory_db_path),
+        orchestrator=WardenOrchestrator(api=None),
     )
     app["ws_task"] = asyncio.create_task(client.run_forever())
 

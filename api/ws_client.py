@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 from aiohttp import ClientSession, WSMsgType
 
-from services.warden_engine import WardenEngine
+from services.orchestrator import WardenOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -16,17 +16,15 @@ class BackendWebSocketClient:
         backend_ws_url: str,
         api_key: str,
         reconnect_delay_seconds: int,
-        engine: WardenEngine,
+        orchestrator: WardenOrchestrator,
     ) -> None:
         self.backend_ws_url = backend_ws_url
         self.api_key = api_key
         self.reconnect_delay_seconds = reconnect_delay_seconds
-        self.engine = engine
+        self.orchestrator = orchestrator
 
     async def _handle_message(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        decision = self.engine.decide(data)
-        tool_output = self.engine.maybe_call_tool(data)
-        return {**decision, **tool_output}
+        return await self.orchestrator.route_payload(data)
 
     async def run_forever(self) -> None:
         headers = {"Authorization": "Bearer " + self.api_key}
