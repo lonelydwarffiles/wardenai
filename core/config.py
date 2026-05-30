@@ -16,6 +16,7 @@ load_dotenv()
 @dataclass(frozen=True)
 class Settings:
     backend_ws_url: str
+    backend_http_base_url: str
     ai_warden_api_key: str
     reconnect_delay_seconds: int = 5
     health_host: str = DEFAULT_HEALTH_HOST
@@ -27,12 +28,31 @@ class Settings:
 def build_backend_ws_endpoint(base_url: str) -> str:
     parsed = urlsplit(base_url)
     scheme = parsed.scheme or "ws"
+    if scheme == "http":
+        scheme = "ws"
+    elif scheme == "https":
+        scheme = "wss"
 
     path = parsed.path.rstrip("/")
     if not path.endswith(WS_ENDPOINT_PATH):
         path = f"{path}{WS_ENDPOINT_PATH}" if path else WS_ENDPOINT_PATH
 
     return urlunsplit((scheme, parsed.netloc, path, parsed.query, parsed.fragment))
+
+
+def build_backend_http_base_url(base_url: str) -> str:
+    parsed = urlsplit(base_url)
+    scheme = parsed.scheme or "http"
+    if scheme == "ws":
+        scheme = "http"
+    elif scheme == "wss":
+        scheme = "https"
+
+    path = parsed.path.rstrip("/")
+    if path.endswith(WS_ENDPOINT_PATH):
+        path = path[: -len(WS_ENDPOINT_PATH)]
+
+    return urlunsplit((scheme, parsed.netloc, path, "", ""))
 
 
 def load_settings() -> Settings:
@@ -52,6 +72,7 @@ def load_settings() -> Settings:
 
     return Settings(
         backend_ws_url=build_backend_ws_endpoint(raw_backend_url),
+        backend_http_base_url=build_backend_http_base_url(raw_backend_url),
         ai_warden_api_key=api_key,
         reconnect_delay_seconds=reconnect_delay_seconds,
         health_host=health_host,

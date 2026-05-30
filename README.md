@@ -20,6 +20,53 @@ Modular, containerized backend for AI-assisted Warden decisions, Ollama model or
 3. Update environment variables as needed.
 4. If using Cloudflare Tunnel private hostnames, set `CLOUDFLARED_TUNNEL_TOKEN`.
 
+### Required Integration Variables (Camera-Site)
+
+- `BACKEND_WS_URL`
+  - Base URL of Camera-Site backend.
+  - Examples:
+    - `https://site.example.com`
+    - `http://backend:8000`
+    - `wss://site.example.com/ws/ai-warden`
+  - The app normalizes this into both:
+    - websocket endpoint: `/ws/ai-warden`
+    - HTTP base for startup probes: `/api/handler/ai-warden/runtime` and `/api/handler/ai-warden/report`
+- `AI_WARDEN_API_KEY`
+  - Bearer token used for websocket and API auth to Camera-Site.
+  - Must match the key configured in Camera-Site AI Warden settings.
+
+### Startup Contract Checks
+
+On startup, wardenai validates Camera-Site integration before entering the long-running websocket loop.
+
+Validated contracts:
+- websocket auth/connectivity to `/ws/ai-warden`
+- `GET /api/handler/ai-warden/runtime` returns `200`
+- `POST /api/handler/ai-warden/report` probe with invalid payload returns `400` or `422`
+
+If any check fails, startup exits fast with an explicit error.
+
+### Health and Readiness Endpoints
+
+- `GET /health`
+  - Liveness endpoint with embedded readiness metadata.
+  - Returns JSON with `status`, `startup_check_ok`, and `startup_check`.
+- `GET /startup-check`
+  - Readiness endpoint for orchestrators.
+  - Returns `200` when startup contract checks pass, otherwise `503`.
+
+Kubernetes guidance:
+- Liveness probe -> `/health`
+- Readiness probe -> `/startup-check`
+
+### Reverse Proxy / Path Prefix Notes
+
+- If Camera-Site is served behind a path prefix (for example `/camera-site`), include that prefix in `BACKEND_WS_URL`.
+- Examples:
+  - `https://example.com/camera-site`
+  - `wss://example.com/camera-site/ws/ai-warden`
+- Ensure proxy rules forward websocket upgrade requests for `/ws/ai-warden` (or prefixed equivalent).
+
 ## One-Click Setup
 
 Use the setup target to initialize the full backend ecosystem:
